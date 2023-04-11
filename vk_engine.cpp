@@ -13,6 +13,7 @@
 #include <VkBootstrap.h>
 
 #include <iostream>
+#include <fstream>
 
 #define VK_CHECK(x) \
     do              \
@@ -44,6 +45,7 @@ void VulkanEngine::init() {
     init_default_renderpass();
     init_framebuffer();
     init_sync_structures();
+    init_pipelines();
 
     _isInitalized = true;
 }
@@ -54,6 +56,10 @@ void VulkanEngine::cleanup() {
         // Wait to ensure our command buffers are empty
         VK_CHECK(vkWaitForFences(_device, 1, &_renderFence, true, 1000000000));
         VK_CHECK(vkResetFences(_device, 1, &_renderFence));
+
+        vkDestroyPipeline(_device, _trianglePipeline, nullptr);
+
+        vkDestroyPipelineLayout(_device, _trianglePipelineLayout, nullptr);
 
         // Destroy our semaphores
         vkDestroySemaphore(_device, _renderSemaphore, nullptr);
@@ -118,7 +124,11 @@ void VulkanEngine::draw() {
     rpInfo.clearValueCount = 1;
     rpInfo.pClearValues = &clearValue;
 
+    // Begin our render pass
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _trianglePipeline);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
 
     vkCmdEndRenderPass(cmd);
 
@@ -319,5 +329,145 @@ void VulkanEngine::init_sync_structures() {
 
     VK_CHECK(vkCreateSemaphore(_device, &semaphoreCreateInfo, nullptr, &_presentSemaphore));
     VK_CHECK(vkCreateSemaphore(_device, &semaphoreCreateInfo, nullptr, &_renderSemaphore));
+
+}
+
+bool VulkanEngine::load_shader_module(const char *file, VkShaderModule *out) {
+    std::ifstream spvFile(file, std::ios::ate | std::ios::binary);
+
+    if (!spvFile.is_open()){
+        return false;
+    }
+
+    size_t fileSize = (size_t)spvFile.tellg();
+
+    std::vector<uint32_t> buffer(fileSize / sizeof(uint32_t));
+
+    spvFile.seekg(0);
+
+    spvFile.read((char*) buffer.data(), fileSize);
+
+    spvFile.close();
+
+    VkShaderModuleCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.pNext = nullptr;
+    createInfo.codeSize = buffer.size() * sizeof(uint32_t);
+    createInfo.pCode = buffer.data();
+
+    // TO-DO: Personally, I think this approach is inefficient and wastes memory, fix this later...
+    VkShaderModule shaderModule;
+    if (vkCreateShaderModule(_device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS){
+        return false;
+    }
+    *out = shaderModule;
+    return true;
+}
+
+void VulkanEngine::init_pipelines() {
+    VkShaderModule fragShader;
+    VkShaderModule vertShader;
+    if (!load_shader_module("shaders/triangle.frag.spv", &fragShader)){
+        printf("FAILED TO LOAD FRAGMENT SHADER!\n");
+        assert(0);
+    }
+    if (!load_shader_module("shaders/triangle.vert.spv", &vertShader)){
+        printf("FAILED TO LOAD VERTEX SHADER!\n");
+        assert(0);
+    }
+    printf("SHADERS LOADED SUCCESSFULLY!\n");
+
+    VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vkinit::pipelineLayoutCreateInfo();
+
+    VK_CHECK(vkCreatePipelineLayout(_device, &pipelineLayoutCreateInfo, nullptr, &_trianglePipelineLayout));
+
+    PipelineBuilder pipelineBuilder;
+
+    pipelineBuilder._shaderStages.push_back(
+            vkinit::pipeline_shader_stage_create_info(VK_SHADER_STAGE_VERTEX_BIT, vertShader)
+            );
+    pipelineBuilder._shaderStages.push_back(
+            vkinit::pipeline_shader_stage_create_info(VK_SHADER_STAGE_FRAGMENT_BIT, fragShader)
+    );
+
+    pipelineBuilder._vertexInputInfo = vkinit::vertex_input_state_create_info();
+
+    pipelineBuilder._inputAssembly = vkinit::input_assembly_create_info(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+
+    pipelineBuilder._viewport.x = 0.0f;
+    pipelineBuilder._viewport.y = 0.0f;
+    pipelineBuilder._viewport.width = (float)_windowExtent.width;
+    pipelineBuilder._viewport.height = (float)_windowExtent.height;
+    pipelineBuilder._viewport.minDepth = 0.0f;
+    pipelineBuilder._viewport.maxDepth = 1.0f;
+
+    pipelineBuilder._scissor.offset = {0,0};
+    pipelineBuilder._scissor.extent = _windowExtent;
+
+    pipelineBuilder._rasterizer = vkinit::rasterizationStateCreateInfo(VK_POLYGON_MODE_FILL);
+
+    pipelineBuilder._multisampling = vkinit::multisampleStateCreateInfo();
+
+    pipelineBuilder._colorBlendAttachment = vkinit::colorBlendAttachmentState();
+
+    pipelineBuilder._pipelineLayout = _trianglePipelineLayout;
+
+    _trianglePipeline = pipelineBuilder.build_pipeline(_device, _renderPass);
+
+
+    vkDestroyShaderModule(_device, fragShader, nullptr);
+    vkDestroyShaderModule(_device, vertShader, nullptr);
+
+
+}
+
+VkPipeline PipelineBuilder::build_pipeline(VkDevice device, VkRenderPass pass) {
+    // Setup our viewport state
+    VkPipelineViewportStateCreateInfo viewportState = {};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.pNext = nullptr;
+
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &_viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &_scissor;
+
+    // Our config for blending colors
+    VkPipelineColorBlendStateCreateInfo colorBlending = {};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.pNext = nullptr;
+
+    colorBlending.logicOpEnable = VK_FALSE;
+    colorBlending.logicOp = VK_LOGIC_OP_COPY;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &_colorBlendAttachment;
+
+
+    VkGraphicsPipelineCreateInfo pipelineCreateInfo = {};
+    pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineCreateInfo.pNext = nullptr;
+
+    pipelineCreateInfo.stageCount = _shaderStages.size();
+    pipelineCreateInfo.pStages = _shaderStages.data();
+    pipelineCreateInfo.pVertexInputState = &_vertexInputInfo;
+    pipelineCreateInfo.pInputAssemblyState = &_inputAssembly;
+    pipelineCreateInfo.pViewportState = &viewportState;
+    pipelineCreateInfo.pRasterizationState = &_rasterizer;
+    pipelineCreateInfo.pMultisampleState = &_multisampling;
+    pipelineCreateInfo.pColorBlendState = &colorBlending;
+    pipelineCreateInfo.layout = _pipelineLayout;
+    pipelineCreateInfo.renderPass = pass;
+    pipelineCreateInfo.subpass = 0;
+    pipelineCreateInfo.basePipelineHandle = VK_NULL_HANDLE;
+
+    VkPipeline pipeline;
+
+    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &pipeline) != VK_SUCCESS){
+        printf("FAILED TO CREATE PIPELINE!\n");
+        assert(0);
+    } else {
+        return pipeline;
+    }
+
 
 }

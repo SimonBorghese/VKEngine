@@ -26,6 +26,8 @@ public:
 
     void run();
 
+    bool load_shader_module(const char *file, VkShaderModule *out);
+
     VkInstance _instance;
     VkDebugUtilsMessengerEXT _debug_messenger;
     VkPhysicalDevice _chosenGPU;
@@ -49,6 +51,9 @@ public:
     VkSemaphore _presentSemaphore, _renderSemaphore;
     VkFence _renderFence;
 
+    VkPipelineLayout _trianglePipelineLayout;
+    VkPipeline _trianglePipeline;
+
 protected:
     void init_vulkan();
 
@@ -62,9 +67,27 @@ protected:
 
     void init_sync_structures();
 
+    void init_pipelines();
+
 private:
 
 
+};
+
+class PipelineBuilder{
+public:
+
+    std::vector<VkPipelineShaderStageCreateInfo> _shaderStages;
+    VkPipelineVertexInputStateCreateInfo _vertexInputInfo;
+    VkPipelineInputAssemblyStateCreateInfo _inputAssembly;
+    VkViewport _viewport;
+    VkRect2D _scissor;
+    VkPipelineRasterizationStateCreateInfo _rasterizer;
+    VkPipelineColorBlendAttachmentState _colorBlendAttachment;
+    VkPipelineMultisampleStateCreateInfo _multisampling;
+    VkPipelineLayout _pipelineLayout;
+
+    VkPipeline build_pipeline(VkDevice device, VkRenderPass pass);
 };
 
 
